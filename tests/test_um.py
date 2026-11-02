@@ -1296,6 +1296,39 @@ def test_backup_diff_and_restore_round_trip(tmp_path, monkeypatch):
     assert backup.snapshots("t-pre-restore")  # the state before the restore was kept
 
 
+def test_backup_relative_source_restores_to_the_original_folder(tmp_path, backup_same_second, monkeypatch):
+    # created as `um backup create saves` in A, restored from B: it must go back to A, not into B
+    a, b = tmp_path / "a", tmp_path / "b"
+    make(a / "saves", {"save.dat": "ORIGIN"})
+    make(b / "saves", {"save.dat": "OTHER CWD"})
+    monkeypatch.chdir(a)
+    backup.create("saves", name="relative")
+    (a / "saves" / "save.dat").write_text("NEW ORIGIN")
+    monkeypatch.chdir(b)
+    backup.restore("relative", yes=True)
+    assert (a / "saves" / "save.dat").read_text() == "ORIGIN"
+    assert (b / "saves" / "save.dat").read_text() == "OTHER CWD"
+
+
+def test_backup_legacy_relative_snapshot_needs_an_explicit_target(tmp_path, backup_same_second, monkeypatch):
+    # snapshots made before sources were recorded absolute only say "saves": don't guess which folder that was
+    root = tmp_path / "data" / "backups" / "old"
+    root.mkdir(parents=True)
+    with backup.zipfile.ZipFile(root / "20261006-120000.zip", "w") as z:
+        z.writestr("save.dat", "ORIGIN")
+        z.writestr("_um_manifest.json", json.dumps(dict(source="saves", created="20261006-120000", note="",
+                                                        files={"save.dat": dict(size=6, sha1="x")})))
+    here = tmp_path / "elsewhere"
+    make(here / "saves", {"save.dat": "OTHER CWD"})
+    monkeypatch.chdir(here)
+    for call in (lambda: backup.restore("old", yes=True), lambda: backup.diff("old")):
+        with pytest.raises(SystemExit):
+            call()
+    assert (here / "saves" / "save.dat").read_text() == "OTHER CWD"
+    backup.restore("old", to=str(here / "saves"), yes=True)  # an explicit --to still works
+    assert (here / "saves" / "save.dat").read_text() == "ORIGIN"
+
+
 # --------------------------------------------------------------------------- comfy
 
 from um import comfy  # noqa: E402

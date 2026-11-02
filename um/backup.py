@@ -70,7 +70,8 @@ def create(src: str, name: str | None = None, note: str = "") -> Path:
         with z:
             for rel in files:
                 z.write(s / rel, rel)
-            z.writestr("_um_manifest.json", json.dumps(dict(source=str(src), created=stamp, note=note, files=files), indent=1))
+            # resolved, so a restore from another cwd still goes back to this folder
+            z.writestr("_um_manifest.json", json.dumps(dict(source=str(s.resolve()), created=stamp, note=note, files=files), indent=1))
     except BaseException:
         out.unlink(missing_ok=True)  # don't leave an incomplete archive as the latest snapshot
         raise
@@ -87,12 +88,22 @@ def _manifest(zp: Path) -> dict:
         return json.loads(z.read("_um_manifest.json"))
 
 
+def _target(m: dict, given: str | None) -> Path:
+    if given:
+        return Path(to_posix(given))
+    t = Path(to_posix(m["source"]))
+    if not t.is_absolute():
+        die(f"this snapshot recorded a relative source ({m['source']!r}), so its folder depends on the cwd: "
+            "pass the folder to restore into (--to, or the diff target)")
+    return t
+
+
 def diff(name: str, target: str | None = None, snapshot: str | None = None) -> dict:
     zp = Path(snapshot) if snapshot else (snapshots(name) or [None])[-1]
     if not zp:
         die(f"no snapshots for {name}")
     m = _manifest(zp)
-    t = Path(to_posix(target or m["source"]))
+    t = _target(m, target)
     now = _scan(t) if t.is_dir() else {}
     old = m["files"]
     res = dict(snapshot=str(zp), target=str(t),
@@ -106,7 +117,7 @@ def restore(name: str, to: str | None = None, snapshot: str | None = None, clean
     if not zp:
         die(f"no snapshots for {name}")
     m = _manifest(zp)
-    t = Path(to_posix(to or m["source"]))
+    t = _target(m, to)
     d = diff(name, str(t), str(zp))
     print(f"restore {zp.name} -> {t}: {len(d['changed'])} changed, {len(d['removed'])} missing, {len(d['added'])} new since"
           + (" (new files will be deleted: --clean)" if clean else " (new files kept)"))
